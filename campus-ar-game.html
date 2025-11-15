@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Permissions-Policy" content="camera=*, geolocation=*" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>校园LBS-AR游戏</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+
+    <!-- 导入A-Frame库 -->
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+    
+    <!-- 导入AR.js库 (包含A-Frame的location-based功能) -->
+    <script src="https://raw.githack.com/AR-js-org/AR.js/main/aframe/build/aframe-ar-nft.js"></script>
+
+    <style>
+      /* 简单的加载提示 */
+      .loader {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.8);
+        color: white;
+        display: flex; /* 默认显示 */
+        flex-direction: column; /* 垂直排列 */
+        justify-content: center;
+        align-items: center;
+        text-align: center;
+        font-family: Arial, sans-serif;
+        font-size: 1.2em;
+        z-index: 9999;
+        padding: 20px;
+        box-sizing: border-box;
+      }
+      /* 【V4 修复】: 添加开始按钮样式 */
+      #startButton {
+        padding: 12px 24px;
+        font-size: 1.2em;
+        color: #333;
+        background-color: #fff;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        margin-top: 20px;
+        font-weight: bold;
+      }
+      #errorMessage {
+        color: #ffcccc;
+        margin-top: 15px;
+        font-size: 0.9em;
+      }
+    </style>
+</head>
+
+<body style="margin: 0; overflow: hidden">
+    <!-- 
+      【V4 修复】: 
+      修改加载提示，包含一个"开始"按钮。
+      权限请求必须由用户交互（点击）触发。
+    -->
+    <div class="loader" id="loader">
+      <p>准备启动AR体验...<br/>请点击下方按钮并授权。</p>
+      <button id="startButton">开始体验</button>
+      <p id="errorMessage"></p> <!-- 用于显示错误信息 -->
+    </div>
+
+    <!-- 
+      A-Frame 场景 (a-scene)
+      【V4 修复】: 移除了 onload="onSceneLoad()"
+    -->
+    <a-scene
+      vr-mode-ui="enabled: false"
+      arjs="sourceType: webcam; videoTexture: true; debugUIEnabled: false;"
+      renderer="antialias: true; alpha: true"
+    >
+      <!-- AR相机 -->
+      <a-camera gps-camera rotation-reader></a-camera>
+
+      <!-- AR内容 1: 红色方块 -->
+      <a-box
+        material="color: #FF6347; opacity: 0.8;"
+        scale="15 15 15"
+        gps-entity-place="latitude: 34.2195645; longitude: 117.1423631;"
+        animation="property: rotation; to: 0 360 0; loop: true; dur: 10000"
+      >
+        <a-text
+          value="[线索A]\n图书馆的秘密"
+          color="#FFFFFF"
+          align="center"
+          scale="3 3 3"
+          position="0 10 0"
+          look-at="[gps-camera]"
+        ></a-text>
+      </a-box>
+
+      <!-- AR内容 2: 历史信息 -->
+      <a-text
+        value="这是校园的历史建筑一号\n始建于1920年..."
+        color="#FFFFFF"
+        scale="50 50 50"
+        align="center"
+        look-at="[gps-camera]"
+        gps-entity-place="latitude: 34.12355; longitude: -118.54331;"
+      ></a-text>
+
+    </a-scene>
+
+    <script>
+      // 【V4 修复】:
+      // 整个逻辑改为由按钮点击触发，而不是 window.onload 自动触发
+      
+      window.onload = () => {
+        const loader = document.getElementById('loader');
+        const startButton = document.getElementById('startButton');
+        const errorMessage = document.getElementById('errorMessage');
+
+        // 检查浏览器是否支持GPS
+        if (!navigator.geolocation) {
+          errorMessage.innerHTML = "错误：你的浏览器不支持GPS定位！";
+          startButton.style.display = 'none'; // 隐藏按钮
+          return;
+        }
+
+        // 1. 为按钮添加点击事件
+        startButton.addEventListener('click', () => {
+          errorMessage.innerHTML = "正在请求位置权限...";
+          
+          // 2. 在点击后才尝试获取GPS位置
+          navigator.geolocation.getCurrentPosition(
+            (position) => {
+              // GPS获取成功
+              console.log('GPS位置获取成功:', position.coords);
+              // 成功后，隐藏整个加载界面
+              loader.style.display = 'none';
+            },
+            (error) => {
+              // 打印更详细的错误信息到控制台
+              console.error('GPS错误 - Code:', error.code, 'Message:', error.message);
+              
+              let msg = "错误：无法获取GPS位置。<br/>";
+
+              switch(error.code) {
+                  case 1: // PERMISSION_DENIED
+                      msg = "错误：请允许使用位置信息！<br/>没有位置权限，AR无法工作。";
+                      if (error.message.includes("policy")) {
+                          msg += "<br/><b>(诊断信息: 权限策略禁止了GPS。请在手机浏览器中直接打开链接。)</b>";
+                      }
+                      break;
+                  case 2: // POSITION_UNAVAILABLE
+                      msg = "错误：位置信息不可用。<br/>请检查你的网络或GPS设置。";
+                      break;
+                  case 3: // TIMEOUT
+                      msg = "错误：获取位置超时。<br/>请确保GPS信号良好。";
+                      break;
+                  default:
+                      msg += `(错误代码: ${error.code}, ${error.message})`;
+              }
+              // 在 loader 中显示具体的错误信息
+              errorMessage.innerHTML = msg;
+            },
+            {
+              enableHighAccuracy: true,
+              timeout: 15000,
+              maximumAge: 0
+            }
+          );
+        });
+      };
+    </script>
+</body>
+</html>
