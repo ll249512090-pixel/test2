@@ -88,33 +88,29 @@
     <div id="statusText">正在初始化...</div>
 
     <!-- 
-      V10 稳定的AR场景 (arjs sourceType: webcam)
-      【V12 修复】: 我们添加了 `renderer="colorManagement: true; alpha: true"`
-      并确保 `arjs` 属性正确，`alpha: true` 是让背景透明的关键。
+      【V13 核心修复】:
+      1. 移除了 `videoTexture: true`。这是导致“白屏”的根源。
+         AR.js 现在会默认使用 "摄像头背景 + 3D叠加" 模式。
+      2. `renderer="alpha: true"` 必须保留，它让A-Frame场景透明。
     -->
     <a-scene
       id="arScene"
       style="display: none;" 
       vr-mode-ui="enabled: false"
-      arjs="sourceType: webcam; videoTexture: true; debugUIEnabled: false;"
+      arjs="sourceType: webcam; debugUIEnabled: false;"
       renderer="antialias: true; alpha: true; colorManagement: true;"
     >
       <!-- 
-        【V12 修复】: 
-        我们不再使用 `a-camera-static`。
-        我们让 AR.js 自动创建和管理相机，
-        这是最稳妥的、防止“白屏”的默认方式。
+        【V13 核心修复】: 
+        移除了所有手写的 `<a-camera>`。
+        AR.js 必须自己创建和管理相机，
+        任何手写的相机都会导致冲突和“白屏”。
       -->
-      <!-- <a-camera a-camera-static></a-camera> -->
 
       <!-- 
         AR物体 (默认隐藏)
-        【V12 修复】: 将物体放在相机内部，
-        并使用 `gps-new-entity-place` (一个模拟的)
-        不，还是用 V10 的方案，物体放在场景中，由JS控制。
+        由JS根据GPS距离来控制 'visible'
       -->
-      <a-camera></a-camera> <!-- 让 AR.js 自动接管这个相机 -->
-
       <a-entity 
         id="target-1-group" 
         position="0 -1 -5" 
@@ -138,8 +134,8 @@
     </a-scene>
 
     <script>
-      // 【V12 核心修复】: 
-      // 绝对严格的串行权限请求：
+      // 【V12/V13 核心逻辑】: 
+      // 绝对严格的串行权限请求，这个逻辑是正确的。
       // 1. 点击按钮 -> 请求 *摄像头*
       // 2. 摄像头成功 -> 释放摄像头
       // 3. (紧接着) -> 请求 *GPS*
@@ -201,7 +197,7 @@
             console.log('开始按钮被点击。');
             startButton.disabled = true;
             
-            // 【V12 关键】: 第一步 -> 请求摄像头
+            // 【V12/V13 关键】: 第一步 -> 请求摄像头
             errorMessage.innerHTML = "正在请求 *摄像头* 权限...<br/>(请在浏览器弹窗中点击“允许”)";
             
             navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
@@ -209,11 +205,11 @@
                 // 摄像头权限成功
                 console.log('摄像头权限获取成功。');
                 
-                // 【V12 关键修复】: 立即停止并释放摄像头，我们只是为了要权限
+                // 【V12/V13 关键修复】: 立即停止并释放摄像头，我们只是为了要权限
                 stream.getTracks().forEach(track => track.stop());
                 console.log('摄像头已释放，准备请求GPS。');
 
-                // 【V12 关键】: 第二步 -> 请求GPS (我们用 getCurrentPosition "获取" 权限)
+                // 【V12/V13 关键】: 第二步 -> 请求GPS (我们用 getCurrentPosition "获取" 权限)
                 errorMessage.innerHTML = "正在请求 *GPS位置* 权限...<br/>(请在弹窗中点击“允许”)";
                 
                 navigator.geolocation.getCurrentPosition(
@@ -221,7 +217,7 @@
                     // GPS 权限也成功了
                     console.log('GPS 权限获取成功。');
                     
-                    // 【V12 关键】: 第三步 -> 万事俱备，启动AR
+                    // 【V12/V13 关键】: 第三步 -> 万事俱备，启动AR
                     errorMessage.innerHTML = ""; // 清空错误
                     loader.style.display = 'none';
                     arScene.style.display = 'block'; // 启动AR场景
@@ -229,7 +225,7 @@
                     
                     console.log('AR 场景已显示。AR.js将使用已获批的摄像头。');
                     
-                    // 【V12 关键】: 第四步 -> 启动 *持续的* GPS跟踪
+                    // 【V12/V13 关键】: 第四步 -> 启动 *持续的* GPS跟踪
                     startGpsWatch(); 
                   },
                   (err) => {
@@ -271,12 +267,16 @@
               statusText.innerHTML = `调试信息：<br/>距离目标 [${target1.id}] 还有 ${Math.round(distance)} 米`;
 
               // 检查是否在区域内
-              const targetElement = document.getElementById(target1.id);
-              if (distance < target1.radius) {
-                targetElement.setAttribute('visible', true);
-                statusText.innerHTML += "<br/>**已进入目标区域！显示AR物体！**";
+              const targetElement = document.getElementById('target-1-group');
+              if (targetElement) { // 增加一个安全检查
+                if (distance < target1.radius) {
+                  targetElement.setAttribute('visible', true);
+                  statusText.innerHTML += "<br/>**已进入目标区域！显示AR物体！**";
+                } else {
+                  targetElement.setAttribute('visible', false);
+                }
               } else {
-                targetElement.setAttribute('visible', false);
+                console.error("错误：找不到AR物体 'target-1-group'!");
               }
             },
             (err) => {
