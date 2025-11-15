@@ -37,7 +37,6 @@
         padding: 20px;
         box-sizing: border-box;
       }
-      /* 【V4 修复】: 添加开始按钮样式 */
       #startButton {
         padding: 12px 24px;
         font-size: 1.2em;
@@ -53,15 +52,14 @@
         color: #ffcccc;
         margin-top: 15px;
         font-size: 0.9em;
+        font-weight: bold; /* 加粗错误信息 */
       }
     </style>
 </head>
 
 <body style="margin: 0; overflow: hidden">
     <!-- 
-      【V4 修复】: 
-      修改加载提示，包含一个"开始"按钮。
-      权限请求必须由用户交互（点击）触发。
+      加载提示
     -->
     <div class="loader" id="loader">
       <p>准备启动AR体验...<br/>请点击下方按钮并授权。</p>
@@ -71,9 +69,13 @@
 
     <!-- 
       A-Frame 场景 (a-scene)
-      【V4 修复】: 移除了 onload="onSceneLoad()"
+      【V5 修复】: 
+      默认隐藏 (display: none)，等待权限成功后再显示。
+      这可以防止 A-Frame/AR.js 过早初始化导致权限冲突。
     -->
     <a-scene
+      id="arScene"
+      style="display: none;" 
       vr-mode-ui="enabled: false"
       arjs="sourceType: webcam; videoTexture: true; debugUIEnabled: false;"
       renderer="antialias: true; alpha: true"
@@ -111,13 +113,15 @@
     </a-scene>
 
     <script>
-      // 【V4 修复】:
-      // 整个逻辑改为由按钮点击触发，而不是 window.onload 自动触发
+      // 整个逻辑改为由按钮点击触发
       
       window.onload = () => {
         const loader = document.getElementById('loader');
         const startButton = document.getElementById('startButton');
         const errorMessage = document.getElementById('errorMessage');
+        const arScene = document.getElementById('arScene'); // 获取AR场景
+
+        console.log('页面加载完成，等待点击。');
 
         // 检查浏览器是否支持GPS
         if (!navigator.geolocation) {
@@ -128,25 +132,32 @@
 
         // 1. 为按钮添加点击事件
         startButton.addEventListener('click', () => {
-          errorMessage.innerHTML = "正在请求位置权限...";
+          console.log('开始按钮被点击。');
+          errorMessage.innerHTML = "正在请求位置权限...<br/>(请在浏览器弹窗中点击“允许”)";
           
           // 2. 在点击后才尝试获取GPS位置
           navigator.geolocation.getCurrentPosition(
             (position) => {
               // GPS获取成功
               console.log('GPS位置获取成功:', position.coords);
-              // 成功后，隐藏整个加载界面
+              
+              // 【V5 修复】: 
+              // 1. 隐藏加载界面
               loader.style.display = 'none';
+              // 2. 显示AR场景，触发A-Frame/AR.js初始化
+              arScene.style.display = 'block'; 
+              console.log('权限成功，正在启动AR场景...');
             },
             (error) => {
               // 打印更详细的错误信息到控制台
               console.error('GPS错误 - Code:', error.code, 'Message:', error.message);
+              console.log('GPS错误对象:', error); // 打印完整错误对象
               
               let msg = "错误：无法获取GPS位置。<br/>";
 
               switch(error.code) {
                   case 1: // PERMISSION_DENIED
-                      msg = "错误：请允许使用位置信息！<br/>没有位置权限，AR无法工作。";
+                      msg = "错误：你拒绝了位置权限！<br/>没有位置权限，AR无法工作。请刷新页面重试。";
                       if (error.message.includes("policy")) {
                           msg += "<br/><b>(诊断信息: 权限策略禁止了GPS。请在手机浏览器中直接打开链接。)</b>";
                       }
@@ -155,7 +166,7 @@
                       msg = "错误：位置信息不可用。<br/>请检查你的网络或GPS设置。";
                       break;
                   case 3: // TIMEOUT
-                      msg = "错误：获取位置超时。<br/>请确保GPS信号良好。";
+                      msg = "错误：获取位置超时。<br/>请确保GPS信号良好并刷新重试。";
                       break;
                   default:
                       msg += `(错误代码: ${error.code}, ${error.message})`;
