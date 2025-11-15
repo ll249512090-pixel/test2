@@ -66,7 +66,6 @@
       <p>准备启动AR体验...<br/>请点击下方按钮并授权。</p>
       <button id="startButton">开始体验</button>
       
-      <!-- 【V7 修复 - 关键】: 修正了无效的 </text> 闭合标签 -->
       <p id="errorMessage"></p> <!-- 用于显示错误信息 -->
     
     </div>
@@ -115,117 +114,120 @@
     </a-scene>
 
     <script>
-      // 【V7 修复】: 
-      // 串行请求权限：1. GPS -> 2. Camera -> 3. 启动AR
+      // 【V8 修复】: 
+      // 交换权限请求顺序：1. Camera -> 2. GPS -> 3. 启动AR
+      // getUserMedia (摄像头) 比 geolocation (GPS) 
+      // 在触发"权限弹窗"这个动作上更稳定。
       
-      window.onload = () => {
-        const loader = document.getElementById('loader');
-        const startButton = document.getElementById('startButton');
-        const errorMessage = document.getElementById('errorMessage');
-        const arScene = document.getElementById('arScene'); // 获取AR场景
+      try { // 包裹整个脚本
+        window.onload = () => {
+          const loader = document.getElementById('loader');
+          const startButton = document.getElementById('startButton');
+          const errorMessage = document.getElementById('errorMessage');
+          const arScene = document.getElementById('arScene'); // 获取AR场景
 
-        console.log('页面加载完成，等待点击。');
-        
-        // 检查 errorMessage 元素是否正确获取
-        if (!errorMessage) {
-            console.error("CRITICAL ERROR: 找不到 #errorMessage 元素!");
-            alert("页面加载出错，请刷新。"); // 最后的手段
+          if (!loader || !startButton || !errorMessage || !arScene) {
+            console.error("CRITICAL ERROR: 页面核心元素未找到!");
+            alert("页面加载出错，请刷新。");
             return;
-        }
-
-        // 检查浏览器是否支持GPS
-        if (!navigator.geolocation) {
-          errorMessage.innerHTML = "错误：你的浏览器不支持GPS定位！";
-          startButton.style.display = 'none'; // 隐藏按钮
-          return;
-        }
-
-        // 检查浏览器是否支持 camera/video
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          errorMessage.innerHTML = "错误：你的浏览器不支持摄像头访问(getUserMedia)！";
-          startButton.style.display = 'none';
-          return;
-        }
-
-        // 1. 为按钮添加点击事件
-        startButton.addEventListener('click', () => {
-          console.log('开始按钮被点击。');
-          
-          try {
-            // --- 第1步：请求GPS位置 ---
-            errorMessage.innerHTML = "正在请求位置权限...<br/>(请在浏览器弹窗中点击“允许”)";
-            
-            navigator.geolocation.getCurrentPosition(
-              (position) => {
-                // GPS获取成功
-                console.log('GPS位置获取成功:', position.coords);
-                
-                // --- 第2步：请求摄像头权限 ---
-                errorMessage.innerHTML = "位置权限已获取。<br/>正在请求摄像头权限...<br/>(请再次点击“允许”)";
-                
-                // 【V7 优化】: 请求后置摄像头
-                navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
-                  .then((stream) => {
-                    // 摄像头权限获取成功
-                    console.log('摄像头权限获取成功。');
-
-                    // 【重要】: 立即停止我们刚刚请求的视频流
-                    // 因为AR.js会自己再次请求，我们只是为了"预热"权限
-                    stream.getTracks().forEach(track => track.stop());
-
-                    // --- 第3步：启动AR ---
-                    console.log('权限全部成功，正在启动AR场景...');
-                    loader.style.display = 'none';
-                    arScene.style.display = 'block'; 
-
-                  })
-                  .catch((camError) => {
-                    // 摄像头权限失败
-                    console.error('摄像头错误:', camError.name, camError.message);
-                    let msg = "错误：摄像头权限被拒绝！<br/>没有摄像头，AR无法工作。请刷新重试。";
-                    if (camError.name === 'NotAllowedError' || camError.name === 'PermissionDeniedError') {
-                        msg = "错误：你拒绝了摄像头权限！<br/>请刷新页面并允许使用摄像头。";
-                    } else if (camError.name === 'NotFoundError' || camError.name === 'NotReadableError') {
-                        msg = "错误：未找到或无法读取后置摄像头。";
-                    } else {
-                        msg = `摄像头错误: ${camError.name}<br/>请刷新重试。`;
-                    }
-                    errorMessage.innerHTML = msg;
-                  });
-
-              },
-              (geoError) => {
-                // GPS权限失败
-                console.error('GPS错误 - Code:', geoError.code, 'Message:', geoError.message);
-                
-                let msg = "错误：无法获取GPS位置。<br/>";
-                switch(geoError.code) {
-                    case 1: // PERMISSION_DENIED
-                        msg = "错误：你拒绝了位置权限！<br/>没有位置权限，AR无法工作。请刷新页面重试。";
-                        break;
-                    case 2: // POSITION_UNAVAILABLE
-                        msg = "错误：位置信息不可用。<br/>请检查你的网络或GPS设置。";
-                        break;
-                    case 3: // TIMEOUT
-                        msg = "错误：获取位置超时。<br/>请确保GPS信号良好并刷新重试。";
-                        break;
-                    default:
-                        msg += `(错误代码: ${geoError.code}, ${geoError.message})`;
-                }
-                errorMessage.innerHTML = msg;
-              },
-              {
-                enableHighAccuracy: true,
-                timeout: 15000,
-                maximumAge: 0
-              }
-            );
-          } catch (e) {
-              console.error("点击事件发生意外错误:", e);
-              errorMessage.innerHTML = `一个意外的错误发生: ${e.message}。请刷新页面重试。`;
           }
-        });
-      };
+
+          console.log('页面加载完成，等待点击。');
+
+          // 检查浏览器是否支持GPS
+          if (!navigator.geolocation) {
+            errorMessage.innerHTML = "错误：你的浏览器不支持GPS定位！";
+            startButton.style.display = 'none'; // 隐藏按钮
+            return;
+          }
+
+          // 检查浏览器是否支持 camera/video
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            errorMessage.innerHTML = "错误：你的浏览器不支持摄像头访问(getUserMedia)！";
+            startButton.style.display = 'none';
+            return;
+          }
+
+          // 1. 为按钮添加点击事件
+          startButton.addEventListener('click', () => {
+            console.log('开始按钮被点击。');
+            
+            try {
+              // --- 【V8】第1步：请求摄像头权限 ---
+              errorMessage.innerHTML = "正在请求摄像头权限...<br/>(请在浏览器弹窗中点击“允许”)";
+              
+              navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+                .then((stream) => {
+                  // 摄像头权限获取成功
+                  console.log('摄像头权限获取成功。');
+                  // 【重要】: 立即停止流，我们只是为了预热权限
+                  stream.getTracks().forEach(track => track.stop());
+
+                  // --- 【V8】第2步：请求GPS位置 ---
+                  errorMessage.innerHTML = "摄像头权限已获取。<br/>正在请求位置权限...<br/>(请再次点击“允许”)";
+
+                  navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                      // GPS获取成功
+                      console.log('GPS位置获取成功:', position.coords);
+                      
+                      // --- 第3步：启动AR ---
+                      console.log('权限全部成功，正在启动AR场景...');
+                      loader.style.display = 'none';
+                      arScene.style.display = 'block'; 
+
+                    },
+                    (geoError) => {
+                      // GPS权限失败
+                      console.error('GPS错误 - Code:', geoError.code, 'Message:', geoError.message);
+                      
+                      let msg = "错误：无法获取GPS位置。<br/>";
+                      switch(geoError.code) {
+                          case 1: // PERMISSION_DENIED
+                              msg = "错误：你拒绝了位置权限！<br/>没有位置权限，AR无法工作。请刷新页面重试。";
+                              break;
+                          case 2: // POSITION_UNAVAILABLE
+                              msg = "错误：位置信息不可用。<br/>请检查你的网络或GPS设置。";
+                              break;
+                          case 3: // TIMEOUT
+                              msg = "错误：获取位置超时。<br/>请确保GPS信号良好并刷新重试。";
+                              break;
+                          default:
+                              msg += `(错误代码: ${geoError.code}, ${geoError.message})`;
+                      }
+                      errorMessage.innerHTML = msg;
+                    },
+                    {
+                      enableHighAccuracy: true,
+                      timeout: 15000,
+                      maximumAge: 0
+                    }
+                  );
+                })
+                .catch((camError) => {
+                  // 摄像头权限失败
+                  console.error('摄像头错误:', camError.name, camError.message);
+                  let msg = "错误：摄像头权限被拒绝！<br/>没有摄像头，AR无法工作。请刷新重试。";
+                  if (camError.name === 'NotAllowedError' || camError.name === 'PermissionDeniedError') {
+                      msg = "错误：你拒绝了摄像头权限！<br/>请刷新页面并允许使用摄像头。";
+                  } else if (camError.name === 'NotFoundError' || camError.name === 'NotReadableError') {
+                      msg = "错误：未找到或无法读取后置摄像头。";
+                  } else {
+                      msg = `摄像头错误: ${camError.name}<br/>请刷新重试。`;
+                  }
+                  errorMessage.innerHTML = msg;
+                });
+
+            } catch (e) {
+                console.error("点击事件发生意外错误:", e);
+                errorMessage.innerHTML = `一个意外的错误发生: ${e.message}。请刷新页面重试。`;
+            }
+          });
+        };
+      } catch (e) {
+        console.error("脚本全局错误:", e);
+        alert("发生致命脚本错误，请刷新：" + e.message);
+      }
     </script>
 </body>
 </html>
