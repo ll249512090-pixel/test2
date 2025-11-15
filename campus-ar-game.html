@@ -89,19 +89,32 @@
 
     <!-- 
       V10 稳定的AR场景 (arjs sourceType: webcam)
+      【V12 修复】: 我们添加了 `renderer="colorManagement: true; alpha: true"`
+      并确保 `arjs` 属性正确，`alpha: true` 是让背景透明的关键。
     -->
     <a-scene
       id="arScene"
       style="display: none;" 
       vr-mode-ui="enabled: false"
       arjs="sourceType: webcam; videoTexture: true; debugUIEnabled: false;"
-      renderer="antialias: true; alpha: true"
+      renderer="antialias: true; alpha: true; colorManagement: true;"
     >
-      <a-camera a-camera-static></a-camera>
+      <!-- 
+        【V12 修复】: 
+        我们不再使用 `a-camera-static`。
+        我们让 AR.js 自动创建和管理相机，
+        这是最稳妥的、防止“白屏”的默认方式。
+      -->
+      <!-- <a-camera a-camera-static></a-camera> -->
 
       <!-- 
         AR物体 (默认隐藏)
+        【V12 修复】: 将物体放在相机内部，
+        并使用 `gps-new-entity-place` (一个模拟的)
+        不，还是用 V10 的方案，物体放在场景中，由JS控制。
       -->
+      <a-camera></a-camera> <!-- 让 AR.js 自动接管这个相机 -->
+
       <a-entity 
         id="target-1-group" 
         position="0 -1 -5" 
@@ -122,16 +135,16 @@
           position="0 1.2 0"
         ></a-text>
       </a-entity>
-
     </a-scene>
 
     <script>
-      // 【V11 核心修复】: 
-      // 严格序列化权限请求：
+      // 【V12 核心修复】: 
+      // 绝对严格的串行权限请求：
       // 1. 点击按钮 -> 请求 *摄像头*
-      // 2. 摄像头成功 -> 启动AR场景 (AR.js 使用已获批的摄像头)
-      // 3. 摄像头成功 -> 请求 *GPS*
-      // 4. GPS成功 -> 开始LBS计算
+      // 2. 摄像头成功 -> 释放摄像头
+      // 3. (紧接着) -> 请求 *GPS*
+      // 4. GPS成功 -> 启动AR场景 (AR.js 此时再请求摄像头会 100% 成功)
+      // 5. GPS成功 -> 启动 *持续的* GPS跟踪
       
       // 1. 定义目标GPS坐标
       const target1 = {
@@ -183,31 +196,53 @@
             return;
           }
 
-          // 3. "开始"按钮 -> 触发权限请求
+          // 3. "开始"按钮 -> 触发串行权限请求
           startButton.addEventListener('click', () => {
             console.log('开始按钮被点击。');
             startButton.disabled = true;
             
-            // 【V11 关键】: 第一步 -> 请求摄像头
+            // 【V12 关键】: 第一步 -> 请求摄像头
             errorMessage.innerHTML = "正在请求 *摄像头* 权限...<br/>(请在浏览器弹窗中点击“允许”)";
             
             navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
               .then((stream) => {
                 // 摄像头权限成功
                 console.log('摄像头权限获取成功。');
-                // 立即停止，我们只是为了要权限
-                stream.getTracks().forEach(track => track.stop());
-
-                // 【V11 关键】: 第二步 -> 启动AR 和 GPS
-                errorMessage.innerHTML = ""; // 清空错误
-                loader.style.display = 'none';
-                arScene.style.display = 'block'; 
-                statusText.style.display = 'block'; // 显示状态栏
-
-                console.log('AR 场景已显示。AR.js将使用已获批的摄像头。');
                 
-                // 【V11 关键】: 第三步 -> 独立启动GPS位置跟踪
-                startGpsWatch();
+                // 【V12 关键修复】: 立即停止并释放摄像头，我们只是为了要权限
+                stream.getTracks().forEach(track => track.stop());
+                console.log('摄像头已释放，准备请求GPS。');
+
+                // 【V12 关键】: 第二步 -> 请求GPS (我们用 getCurrentPosition "获取" 权限)
+                errorMessage.innerHTML = "正在请求 *GPS位置* 权限...<br/>(请在弹窗中点击“允许”)";
+                
+                navigator.geolocation.getCurrentPosition(
+                  (position) => {
+                    // GPS 权限也成功了
+                    console.log('GPS 权限获取成功。');
+                    
+                    // 【V12 关键】: 第三步 -> 万事俱备，启动AR
+                    errorMessage.innerHTML = ""; // 清空错误
+                    loader.style.display = 'none';
+                    arScene.style.display = 'block'; // 启动AR场景
+                    statusText.style.display = 'block'; // 显示状态栏
+                    
+                    console.log('AR 场景已显示。AR.js将使用已获批的摄像头。');
+                    
+                    // 【V12 关键】: 第四步 -> 启动 *持续的* GPS跟踪
+                    startGpsWatch(); 
+                  },
+                  (err) => {
+                    // GPS 权限失败
+                    console.error("GPS 权限错误:", err);
+                    let msg = "错误：你拒绝了 *GPS* 权限！<br/>没有GPS，LBS无法工作。请刷新重试。";
+                    if (err.code === 2) msg = "错误：GPS位置不可用。";
+                    if (err.code === 3) msg = "错误：GPS定位超时。";
+                    errorMessage.innerHTML = msg;
+                    startButton.disabled = false; // 允许重试
+                  },
+                  { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 } // 延长超时
+                );
 
               })
               .catch((err) => {
@@ -219,10 +254,10 @@
           });
         };
 
-        // 4. 独立、持续的GPS跟踪
+        // 4. 独立、持续的GPS跟踪 (这个函数现在只在权限都OK后才被调用)
         function startGpsWatch() {
           const statusText = document.getElementById('statusText');
-          statusText.innerHTML = "正在请求 *GPS位置* 权限...<br/>(请在弹窗中点击“允许”)";
+          statusText.innerHTML = "LBS已启动，正在持续获取位置...";
 
           navigator.geolocation.watchPosition(
             (position) => {
@@ -245,10 +280,10 @@
               }
             },
             (err) => {
-              // GPS错误
-              console.error("GPS Error:", err);
-              let msg = "GPS错误：";
-              if (err.code === 1) msg = "错误：你拒绝了GPS位置权限！";
+              // GPS跟踪时出错 (比如中途关闭了GPS)
+              console.error("GPS Watch Error:", err);
+              let msg = "GPS跟踪丢失：";
+              if (err.code === 1) msg = "错误：GPS权限在中途被撤销！";
               if (err.code === 2) msg = "错误：位置不可用（请检查GPS或网络）。";
               if (err.code === 3) msg = "错误：GPS定位超时。";
               statusText.innerHTML = msg;
