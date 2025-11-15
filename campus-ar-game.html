@@ -13,11 +13,14 @@
     <!-- 导入A-Frame库 -->
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     
-    <!-- 导入AR.js库 -->
-    <script src="https://raw.githack.com/AR-js-org/AR.js/main/aframe/build/aframe-ar-nft.js"></script>
+    <!-- 
+      【V14 关键变更】: 导入 AR.js 库 (Marker-Based)
+      我们使用 `aframe-ar.js`，这是最稳定的标记跟踪库
+    -->
+    <script src="https://raw.githack.com/AR-js-org/AR.js/main/aframe/build/aframe-ar.js"></script>
 
     <style>
-      /* 简单的加载提示 */
+      /* 样式保持不变 */
       .loader {
         position: fixed;
         top: 0;
@@ -88,59 +91,67 @@
     <div id="statusText">正在初始化...</div>
 
     <!-- 
-      【V13 核心修复】:
-      1. 移除了 `videoTexture: true`。这是导致“白屏”的根源。
-         AR.js 现在会默认使用 "摄像头背景 + 3D叠加" 模式。
-      2. `renderer="alpha: true"` 必须保留，它让A-Frame场景透明。
+      【V14 核心变更】: 
+      1. 使用 `arjs` 的默认（标记）模式。
+         `detectionMode` 和 `matrixCodeType` 是为了确保兼容性。
+      2. 移除了 `renderer` 属性，让 AR.js 自动处理，
+         这是解决“白屏”最稳妥的方法。
     -->
     <a-scene
       id="arScene"
       style="display: none;" 
       vr-mode-ui="enabled: false"
-      arjs="sourceType: webcam; debugUIEnabled: false;"
-      renderer="antialias: true; alpha: true; colorManagement: true;"
+      arjs="sourceType: webcam; detectionMode: mono_and_matrix; matrixCodeType: 3x3; debugUIEnabled: false;"
+      renderer="antialias: true; alpha: true;"
     >
       <!-- 
-        【V13 核心修复】: 
-        移除了所有手写的 `<a-camera>`。
-        AR.js 必须自己创建和管理相机，
-        任何手写的相机都会导致冲突和“白屏”。
+        【V14 核心变更】: 
+        我们不再将物体放在世界中，而是放在一个标记 (marker) 内部。
+        我们使用 AR.js 默认的 "hiro" 标记。
+        你需要打印这个标记：
+        https://raw.githack.com/AR-js-org/AR.js/main/data/images/hiro.png
       -->
-
-      <!-- 
-        AR物体 (默认隐藏)
-        由JS根据GPS距离来控制 'visible'
-      -->
-      <a-entity 
-        id="target-1-group" 
-        position="0 -1 -5" 
-        visible="false"
-        animation="property: rotation; to: 0 360 0; loop: true; dur: 10000"
+      <a-marker
+        id="marker-1"
+        type="pattern"
+        url="https://raw.githack.com/AR-js-org/AR.js/main/data/patterns/pattern-hiro.patt"
       >
-        <a-box
-          material="color: #FF6347; opacity: 0.8;"
-          scale="1.5 1.5 1.5"
+        <!-- 
+          AR物体 (默认隐藏)
+          它现在的位置是相对于 "hiro" 标记的
+        -->
+        <a-entity 
+          id="target-1-group" 
+          position="0 0.5 0" 
+          visible="false"
+          animation="property: rotation; to: 0 360 0; loop: true; dur: 10000"
         >
-        </a-box>
-        <a-text
-          id="target-1-text"
-          value="[线索A]\n图书馆的秘密"
-          color="#FFFFFF"
-          align="center"
-          scale="0.8 0.8 0.8"
-          position="0 1.2 0"
-        ></a-text>
-      </a-entity>
+          <a-box
+            material="color: #FF6347; opacity: 0.8;"
+            scale="1 1 1"
+          >
+          </a-box>
+          <a-text
+            value="[线索A]\n图书馆的秘密"
+            color="#FFFFFF"
+            align="center"
+            scale="0.8 0.8 0.8"
+            position="0 1 0"
+          ></a-text>
+        </a-entity>
+      </a-marker>
+      
+      <!-- 
+        【V14 关键】: 
+        AR.js 会自动创建相机，我们不需要手写
+      -->
+      <a-entity camera></a-entity>
     </a-scene>
 
     <script>
-      // 【V12/V13 核心逻辑】: 
-      // 绝对严格的串行权限请求，这个逻辑是正确的。
-      // 1. 点击按钮 -> 请求 *摄像头*
-      // 2. 摄像头成功 -> 释放摄像头
-      // 3. (紧接着) -> 请求 *GPS*
-      // 4. GPS成功 -> 启动AR场景 (AR.js 此时再请求摄像头会 100% 成功)
-      // 5. GPS成功 -> 启动 *持续的* GPS跟踪
+      // 【V14 核心逻辑】: 
+      // 1. 保留 V12/V13 成功的“串行权限请求”逻辑。
+      // 2. 增加“LBS + Marker”双重触发逻辑。
       
       // 1. 定义目标GPS坐标
       const target1 = {
@@ -150,7 +161,7 @@
         radius: 30 // 触发区域 (30米)
       };
 
-      // 2. 计算距离的函数 (Haversine)
+      // 2. 计算距离的函数 (Haversine) - 保持不变
       function getDistance(lat1, lon1, lat2, lon2) {
         const R = 6371e3; // 地球半径 (米)
         const p1 = lat1 * Math.PI / 180;
@@ -164,6 +175,18 @@
         return R * c; // 返回距离 (米)
       }
 
+      // 【V14 关键】: 双重触发的状态变量
+      let isUserInZone = false;
+      let isMarkerFound = false;
+      let targetElement = null;
+
+      // 【V14 关键】: 更新AR物体可见性的函数
+      function updateVisibility() {
+        if (targetElement) {
+          targetElement.setAttribute('visible', isUserInZone && isMarkerFound);
+        }
+      }
+
       try {
         window.onload = () => {
           const loader = document.getElementById('loader');
@@ -171,8 +194,10 @@
           const errorMessage = document.getElementById('errorMessage');
           const arScene = document.getElementById('arScene');
           const statusText = document.getElementById('statusText');
+          const marker = document.getElementById('marker-1');
+          targetElement = document.getElementById('target-1-group'); // 获取目标元素
 
-          if (!loader || !startButton || !errorMessage || !arScene || !statusText) {
+          if (!loader || !startButton || !errorMessage || !arScene || !statusText || !marker || !targetElement) {
             console.error("CRITICAL ERROR: 页面核心元素未找到!");
             alert("页面加载出错，请刷新。");
             return;
@@ -180,7 +205,7 @@
 
           console.log('页面加载完成，等待点击。');
 
-          // 提前检查兼容性
+          // 提前检查兼容性 (保持不变)
           if (!navigator.geolocation) {
             errorMessage.innerHTML = "错误：你的浏览器不支持GPS定位！";
             startButton.style.display = 'none';
@@ -192,40 +217,36 @@
             return;
           }
 
-          // 3. "开始"按钮 -> 触发串行权限请求
+          // 3. "开始"按钮 -> 触发串行权限请求 (保持 V13 的稳健逻辑)
           startButton.addEventListener('click', () => {
             console.log('开始按钮被点击。');
             startButton.disabled = true;
             
-            // 【V12/V13 关键】: 第一步 -> 请求摄像头
+            // 第一步 -> 请求摄像头
             errorMessage.innerHTML = "正在请求 *摄像头* 权限...<br/>(请在浏览器弹窗中点击“允许”)";
             
             navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
               .then((stream) => {
-                // 摄像头权限成功
                 console.log('摄像头权限获取成功。');
-                
-                // 【V12/V13 关键修复】: 立即停止并释放摄像头，我们只是为了要权限
                 stream.getTracks().forEach(track => track.stop());
                 console.log('摄像头已释放，准备请求GPS。');
 
-                // 【V12/V13 关键】: 第二步 -> 请求GPS (我们用 getCurrentPosition "获取" 权限)
+                // 第二步 -> 请求GPS
                 errorMessage.innerHTML = "正在请求 *GPS位置* 权限...<br/>(请在弹窗中点击“允许”)";
                 
                 navigator.geolocation.getCurrentPosition(
                   (position) => {
-                    // GPS 权限也成功了
                     console.log('GPS 权限获取成功。');
                     
-                    // 【V12/V13 关键】: 第三步 -> 万事俱备，启动AR
-                    errorMessage.innerHTML = ""; // 清空错误
+                    // 第三步 -> 启动AR
+                    errorMessage.innerHTML = ""; 
                     loader.style.display = 'none';
-                    arScene.style.display = 'block'; // 启动AR场景
-                    statusText.style.display = 'block'; // 显示状态栏
+                    arScene.style.display = 'block'; 
+                    statusText.style.display = 'block'; 
                     
                     console.log('AR 场景已显示。AR.js将使用已获批的摄像头。');
                     
-                    // 【V12/V13 关键】: 第四步 -> 启动 *持续的* GPS跟踪
+                    // 第四步 -> 启动 *持续的* GPS跟踪
                     startGpsWatch(); 
                   },
                   (err) => {
@@ -235,9 +256,9 @@
                     if (err.code === 2) msg = "错误：GPS位置不可用。";
                     if (err.code === 3) msg = "错误：GPS定位超时。";
                     errorMessage.innerHTML = msg;
-                    startButton.disabled = false; // 允许重试
+                    startButton.disabled = false;
                   },
-                  { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 } // 延长超时
+                  { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 } 
                 );
 
               })
@@ -248,45 +269,56 @@
                 startButton.disabled = false;
               });
           });
+
+          // 【V14 关键】: 添加 Marker 事件监听
+          marker.addEventListener('markerFound', () => {
+            console.log('Marker Found!');
+            isMarkerFound = true;
+            updateVisibility();
+          });
+
+          marker.addEventListener('markerLost', () => {
+            console.log('Marker Lost!');
+            isMarkerFound = false;
+            updateVisibility();
+          });
         };
 
-        // 4. 独立、持续的GPS跟踪 (这个函数现在只在权限都OK后才被调用)
+        // 4. 独立、持续的GPS跟踪
         function startGpsWatch() {
           const statusText = document.getElementById('statusText');
           statusText.innerHTML = "LBS已启动，正在持续获取位置...";
 
           navigator.geolocation.watchPosition(
             (position) => {
-              // GPS成功获取
               const userLat = position.coords.latitude;
               const userLng = position.coords.longitude;
-
-              // 计算距离
               const distance = getDistance(userLat, userLng, target1.lat, target1.lng);
               
               statusText.innerHTML = `调试信息：<br/>距离目标 [${target1.id}] 还有 ${Math.round(distance)} 米`;
 
-              // 检查是否在区域内
-              const targetElement = document.getElementById('target-1-group');
-              if (targetElement) { // 增加一个安全检查
-                if (distance < target1.radius) {
-                  targetElement.setAttribute('visible', true);
-                  statusText.innerHTML += "<br/>**已进入目标区域！显示AR物体！**";
-                } else {
-                  targetElement.setAttribute('visible', false);
-                }
+              // 【V14 关键】: 更新 GPS 状态
+              if (distance < target1.radius) {
+                isUserInZone = true;
+                statusText.innerHTML += "<br/>**已进入目标区域！请扫描标记！**";
               } else {
-                console.error("错误：找不到AR物体 'target-1-group'!");
+                isUserInZone = false;
+                statusText.innerHTML += "<br/>(已离开目标区域)";
               }
+              
+              // 【V14 关键】: 每次GPS更新都检查一次是否需要显示
+              updateVisibility();
             },
             (err) => {
-              // GPS跟踪时出错 (比如中途关闭了GPS)
+              // GPS跟踪时出错
               console.error("GPS Watch Error:", err);
               let msg = "GPS跟踪丢失：";
               if (err.code === 1) msg = "错误：GPS权限在中途被撤销！";
               if (err.code === 2) msg = "错误：位置不可用（请检查GPS或网络）。";
               if (err.code === 3) msg = "错误：GPS定位超时。";
               statusText.innerHTML = msg;
+              isUserInZone = false; // 出错了就当不在区域内
+              updateVisibility();
             },
             {
               enableHighAccuracy: true,
