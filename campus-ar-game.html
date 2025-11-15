@@ -14,6 +14,7 @@
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     
     <!-- 导入AR.js库 (包含A-Frame的location-based功能) -->
+    <!-- 注意：虽然我们导入了完整的库，但我们"故意不使用"它不稳定的GPS组件 -->
     <script src="https://raw.githack.com/AR-js-org/AR.js/main/aframe/build/aframe-ar-nft.js"></script>
 
     <style>
@@ -48,17 +49,26 @@
         margin-top: 20px;
         font-weight: bold;
       }
-      /* 按钮被禁用时的样式 */
       #startButton:disabled {
         background-color: #ccc;
         cursor: not-allowed;
       }
-      #errorMessage {
-        color: #ffcccc;
-        margin-top: 15px;
+      
+      /* 【V10 新增】: 一个永久显示在底部的状态栏 */
+      #statusText {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        background: rgba(0, 0, 0, 0.7);
+        color: white;
+        padding: 10px;
+        text-align: center;
+        font-family: Arial, sans-serif;
         font-size: 0.9em;
-        font-weight: bold; /* 加粗错误信息 */
-        line-height: 1.5; /* 增加行高 */
+        z-index: 10000;
+        display: none; /* 默认隐藏，启动AR后显示 */
+        box-sizing: border-box;
       }
     </style>
 </head>
@@ -70,15 +80,19 @@
     <div class="loader" id="loader">
       <p>准备启动AR体验...<br/>请点击下方按钮并授权。</p>
       <button id="startButton">开始体验</button>
-      
-      <p id="errorMessage"></p> <!-- 用于显示错误信息 -->
-    
+      <p id="errorMessage"></p> <!-- 用于显示启动错误 -->
     </div>
 
     <!-- 
-      A-Frame 场景 (a-scene)
-      默认隐藏 (display: none)，等待用户点击后再显示。
-      当它被显示时，AR.js 和 gps-camera 应该会自动触发权限请求。
+      【V10 新增】: 状态显示栏
+    -->
+    <div id="statusText">正在初始化...</div>
+
+    <!-- 
+      【V10 关键改动】: 
+      - 不再使用 gps-camera
+      - arjs 的 sourceType 只是 "webcam"
+      - 这保证了AR场景本身是稳定、不会崩溃的
     -->
     <a-scene
       id="arScene"
@@ -87,53 +101,73 @@
       arjs="sourceType: webcam; videoTexture: true; debugUIEnabled: false;"
       renderer="antialias: true; alpha: true"
     >
-      <!-- AR相机 -->
-      <a-camera gps-camera rotation-reader></a-camera>
+      <!-- 【V10 关键改动】: 使用标准相机，而不是 gps-camera -->
+      <a-camera a-camera-static></a-camera>
 
-      <!-- AR内容 1: 红色方块 -->
-      <a-box
-        material="color: #FF6347; opacity: 0.8;"
-        scale="15 15 15"
-        gps-entity-place="latitude: 34.2195645; longitude: 117.1423631;"
+      <!-- 
+        【V10 关键改动】: 
+        - 移除 "gps-entity-place" (导致崩溃的根源)
+        - AR物体始终在相机前 (position="0 -1 -5")
+        - 默认 "visible="false"" (不可见)
+        - 我们用JS根据"距离"来控制它是否可见
+      -->
+      <a-entity 
+        id="target-1-group" 
+        position="0 -1 -5" 
+        visible="false"
         animation="property: rotation; to: 0 360 0; loop: true; dur: 10000"
       >
+        <a-box
+          material="color: #FF6347; opacity: 0.8;"
+          scale="1.5 1.5 1.5"
+        >
+        </a-box>
         <a-text
+          id="target-1-text"
           value="[线索A]\n图书馆的秘密"
           color="#FFFFFF"
           align="center"
-          scale="3 3 3"
-          position="0 10 0"
-          look-at="[gps-camera]"
+          scale="0.8 0.8 0.8"
+          position="0 1.2 0"
         ></a-text>
-      </a-box>
-
-      <!-- AR内容 2: 历史信息 -->
-      <a-text
-        value="这是校园的历史建筑一号\n始建于1920年..."
-        color="#FFFFFF"
-        scale="50 50 50"
-        align="center"
-        look-at="[gps-camera]"
-        gps-entity-place="latitude: 34.12355; longitude: -118.54331;"
-      ></a-text>
+      </a-entity>
 
     </a-scene>
 
     <script>
-      // 【V9 修复】: 
-      // 策略变更：不再手动请求权限。
-      // 我们让用户点击按钮，按钮的唯一作用是“取消隐藏”AR场景。
-      // AR.js 库 (arjs 和 gps-camera) 在场景被激活时，
-      // 应该会自动、且更稳定地处理权限请求。
+      // 【V10 核心逻辑】: 
       
+      // 1. 定义目标GPS坐标
+      const target1 = {
+        id: "target-1-group",
+        lat: 34.2195645, // 你的图书馆纬度
+        lng: 117.1423631, // 你的图书馆经度
+        radius: 30 // 触发区域 (30米)
+      };
+
+      // 2. 地球半径和计算距离的函数 (Haversine a.k.a 'haversine')
+      function getDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371e3; // 地球半径 (米)
+        const p1 = lat1 * Math.PI / 180;
+        const p2 = lat2 * Math.PI / 180;
+        const deltaP = p2 - p1;
+        const deltaL = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(deltaP / 2) * Math.sin(deltaP / 2) +
+                  Math.cos(p1) * Math.cos(p2) *
+                  Math.sin(deltaL / 2) * Math.sin(deltaL / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c; // 返回距离 (米)
+      }
+
       try {
         window.onload = () => {
           const loader = document.getElementById('loader');
           const startButton = document.getElementById('startButton');
           const errorMessage = document.getElementById('errorMessage');
           const arScene = document.getElementById('arScene');
+          const statusText = document.getElementById('statusText');
 
-          if (!loader || !startButton || !errorMessage || !arScene) {
+          if (!loader || !startButton || !errorMessage || !arScene || !statusText) {
             console.error("CRITICAL ERROR: 页面核心元素未找到!");
             alert("页面加载出错，请刷新。");
             return;
@@ -141,43 +175,85 @@
 
           console.log('页面加载完成，等待点击。');
 
-          // 提前检查兼容性，如果浏览器根本不支持，就提示
+          // 提前检查兼容性
           if (!navigator.geolocation) {
-            errorMessage.innerHTML = "错误：你的浏览器不支持GPS定位！<br/>（此功能无法在此浏览器上运行）";
+            errorMessage.innerHTML = "错误：你的浏览器不支持GPS定位！";
             startButton.style.display = 'none';
             return;
           }
           if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            errorMessage.innerHTML = "错误：你的浏览器不支持摄像头访问！<br/>（此功能无法在此浏览器上运行）";
+            errorMessage.innerHTML = "错误：你的浏览器不支持摄像头访问！";
             startButton.style.display = 'none';
             return;
           }
 
-          // 1. 为按钮添加点击事件
+          // 3. "开始"按钮的唯一作用：启动AR场景
           startButton.addEventListener('click', () => {
             console.log('开始按钮被点击。');
-            
             try {
-              // 【V9 关键修复】: 立即禁用按钮，防止“双击”导致崩溃
               startButton.disabled = true;
-              errorMessage.innerHTML = "正在启动AR引擎...<br/>(请注意浏览器弹出的权限申请)";
+              errorMessage.innerHTML = "正在启动AR引擎...<br/>(请注意浏览器弹出的 *摄像头* 权限申请)";
 
-              // 【V9 关键策略】: 
-              // 1. 隐藏加载界面
-              // 2. 显示AR场景
-              // 现在，让 A-Frame 和 AR.js 库自己去处理权限请求。
+              // 隐藏加载器，显示AR场景
               loader.style.display = 'none';
               arScene.style.display = 'block'; 
+              statusText.style.display = 'block'; // 显示状态栏
 
-              console.log('AR 场景已显示。等待 AR.js 触发权限请求...');
+              console.log('AR 场景已显示。AR.js将请求 *摄像头* 权限...');
+              
+              // 4. AR场景启动后，我们 *独立* 启动GPS位置跟踪
+              startGpsWatch();
 
             } catch (e) {
                 console.error("点击事件发生意外错误:", e);
-                errorMessage.innerHTML = `一个意外的错误发生: ${e.message}。请刷新页面重试。`;
-                startButton.disabled = false; // 允许重试
+                statusText.innerHTML = `启动错误: ${e.message}`;
+                startButton.disabled = false;
             }
           });
         };
+
+        // 5. 独立、持续的GPS跟踪
+        function startGpsWatch() {
+          const statusText = document.getElementById('statusText');
+          statusText.innerHTML = "正在请求 *GPS位置* 权限...<br/>(请在弹窗中点击“允许”)";
+
+          navigator.geolocation.watchPosition(
+            (position) => {
+              // GPS成功获取
+              const userLat = position.coords.latitude;
+              const userLng = position.coords.longitude;
+
+              // 计算距离
+              const distance = getDistance(userLat, userLng, target1.lat, target1.lng);
+              
+              statusText.innerHTML = `调试信息：<br/>距离目标 [${target1.id}] 还有 ${Math.round(distance)} 米`;
+
+              // 检查是否在区域内
+              const targetElement = document.getElementById(target1.id);
+              if (distance < target1.radius) {
+                targetElement.setAttribute('visible', true);
+                statusText.innerHTML += "<br/>**已进入目标区域！显示AR物体！**";
+              } else {
+                targetElement.setAttribute('visible', false);
+              }
+            },
+            (err) => {
+              // GPS错误
+              console.error("GPS Error:", err);
+              let msg = "GPS错误：";
+              if (err.code === 1) msg = "错误：你拒绝了GPS位置权限！";
+              if (err.code === 2) msg = "错误：位置不可用（请检查GPS或网络）。";
+              if (err.code === 3) msg = "错误：GPS定位超时。";
+              statusText.innerHTML = msg;
+            },
+            {
+              enableHighAccuracy: true,
+              timeout: 10000,
+              maximumAge: 0
+            }
+          );
+        }
+
       } catch (e) {
         console.error("脚本全局错误:", e);
         alert("发生致命脚本错误，请刷新：" + e.message);
