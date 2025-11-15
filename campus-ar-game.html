@@ -13,8 +13,7 @@
     <!-- 导入A-Frame库 -->
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     
-    <!-- 导入AR.js库 (包含A-Frame的location-based功能) -->
-    <!-- 注意：虽然我们导入了完整的库，但我们"故意不使用"它不稳定的GPS组件 -->
+    <!-- 导入AR.js库 -->
     <script src="https://raw.githack.com/AR-js-org/AR.js/main/aframe/build/aframe-ar-nft.js"></script>
 
     <style>
@@ -54,7 +53,7 @@
         cursor: not-allowed;
       }
       
-      /* 【V10 新增】: 一个永久显示在底部的状态栏 */
+      /* 状态栏 */
       #statusText {
         position: fixed;
         bottom: 0;
@@ -67,7 +66,7 @@
         font-family: Arial, sans-serif;
         font-size: 0.9em;
         z-index: 10000;
-        display: none; /* 默认隐藏，启动AR后显示 */
+        display: none; /* 默认隐藏 */
         box-sizing: border-box;
       }
     </style>
@@ -84,15 +83,12 @@
     </div>
 
     <!-- 
-      【V10 新增】: 状态显示栏
+      状态显示栏
     -->
     <div id="statusText">正在初始化...</div>
 
     <!-- 
-      【V10 关键改动】: 
-      - 不再使用 gps-camera
-      - arjs 的 sourceType 只是 "webcam"
-      - 这保证了AR场景本身是稳定、不会崩溃的
+      V10 稳定的AR场景 (arjs sourceType: webcam)
     -->
     <a-scene
       id="arScene"
@@ -101,15 +97,10 @@
       arjs="sourceType: webcam; videoTexture: true; debugUIEnabled: false;"
       renderer="antialias: true; alpha: true"
     >
-      <!-- 【V10 关键改动】: 使用标准相机，而不是 gps-camera -->
       <a-camera a-camera-static></a-camera>
 
       <!-- 
-        【V10 关键改动】: 
-        - 移除 "gps-entity-place" (导致崩溃的根源)
-        - AR物体始终在相机前 (position="0 -1 -5")
-        - 默认 "visible="false"" (不可见)
-        - 我们用JS根据"距离"来控制它是否可见
+        AR物体 (默认隐藏)
       -->
       <a-entity 
         id="target-1-group" 
@@ -135,7 +126,12 @@
     </a-scene>
 
     <script>
-      // 【V10 核心逻辑】: 
+      // 【V11 核心修复】: 
+      // 严格序列化权限请求：
+      // 1. 点击按钮 -> 请求 *摄像头*
+      // 2. 摄像头成功 -> 启动AR场景 (AR.js 使用已获批的摄像头)
+      // 3. 摄像头成功 -> 请求 *GPS*
+      // 4. GPS成功 -> 开始LBS计算
       
       // 1. 定义目标GPS坐标
       const target1 = {
@@ -145,7 +141,7 @@
         radius: 30 // 触发区域 (30米)
       };
 
-      // 2. 地球半径和计算距离的函数 (Haversine a.k.a 'haversine')
+      // 2. 计算距离的函数 (Haversine)
       function getDistance(lat1, lon1, lat2, lon2) {
         const R = 6371e3; // 地球半径 (米)
         const p1 = lat1 * Math.PI / 180;
@@ -187,32 +183,43 @@
             return;
           }
 
-          // 3. "开始"按钮的唯一作用：启动AR场景
+          // 3. "开始"按钮 -> 触发权限请求
           startButton.addEventListener('click', () => {
             console.log('开始按钮被点击。');
-            try {
-              startButton.disabled = true;
-              errorMessage.innerHTML = "正在启动AR引擎...<br/>(请注意浏览器弹出的 *摄像头* 权限申请)";
+            startButton.disabled = true;
+            
+            // 【V11 关键】: 第一步 -> 请求摄像头
+            errorMessage.innerHTML = "正在请求 *摄像头* 权限...<br/>(请在浏览器弹窗中点击“允许”)";
+            
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+              .then((stream) => {
+                // 摄像头权限成功
+                console.log('摄像头权限获取成功。');
+                // 立即停止，我们只是为了要权限
+                stream.getTracks().forEach(track => track.stop());
 
-              // 隐藏加载器，显示AR场景
-              loader.style.display = 'none';
-              arScene.style.display = 'block'; 
-              statusText.style.display = 'block'; // 显示状态栏
+                // 【V11 关键】: 第二步 -> 启动AR 和 GPS
+                errorMessage.innerHTML = ""; // 清空错误
+                loader.style.display = 'none';
+                arScene.style.display = 'block'; 
+                statusText.style.display = 'block'; // 显示状态栏
 
-              console.log('AR 场景已显示。AR.js将请求 *摄像头* 权限...');
-              
-              // 4. AR场景启动后，我们 *独立* 启动GPS位置跟踪
-              startGpsWatch();
+                console.log('AR 场景已显示。AR.js将使用已获批的摄像头。');
+                
+                // 【V11 关键】: 第三步 -> 独立启动GPS位置跟踪
+                startGpsWatch();
 
-            } catch (e) {
-                console.error("点击事件发生意外错误:", e);
-                statusText.innerHTML = `启动错误: ${e.message}`;
+              })
+              .catch((err) => {
+                // 摄像头权限失败
+                console.error("摄像头权限错误:", err);
+                errorMessage.innerHTML = "错误：你拒绝了 *摄像头* 权限！<br/>没有摄像头，AR无法工作。请刷新重试。";
                 startButton.disabled = false;
-            }
+              });
           });
         };
 
-        // 5. 独立、持续的GPS跟踪
+        // 4. 独立、持续的GPS跟踪
         function startGpsWatch() {
           const statusText = document.getElementById('statusText');
           statusText.innerHTML = "正在请求 *GPS位置* 权限...<br/>(请在弹窗中点击“允许”)";
